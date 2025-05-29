@@ -1,0 +1,367 @@
+import socket
+import threading
+import json
+import sys
+import time
+import pygame
+import time
+
+currentplayer = -1
+games = {}
+
+class servers():
+    def __init__(self):
+        self.server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.port = 5555
+        self.address = '0.0.0.0'
+        self.server.bind((self.address,self.port))
+        self.server.listen(2)
+        self.lock = threading.Lock()
+        self.init_gun_msgdict = { #3 gun massage
+        'type':3,
+        'rotate':90,
+        'ifflip':True,
+        'mouse_pos':[100,100]
+        }
+        self.msgdict = {}
+        self.targets = {1:[10,5,3],
+                   2:[12,8,5]}
+        self.width = 900
+        self.val = 3
+
+        self.gundata = {}
+        self.level = 1
+        self.one_coords = [[],[],[]]
+        self.two_coords = [[],[],[]]
+        self.time_remaining = 30
+        self.leave = False
+
+        self.gundata[0] = self.init_gun_msgdict
+        self.gundata[1] = self.init_gun_msgdict
+        self.scores = {}
+        self.init_score = {
+            'type':6,
+            'score':0
+        }
+        self.scores[0] = self.init_score
+        self.scores[1] = self.init_score
+        self.client_list = []
+        self.init_monlevel1_message = {
+            'type':4,
+            'coords':self.one_coords,
+            'level':1
+        }
+        self.init_monlevel2_message = {
+            'type':4,
+            'coords':self.two_coords,
+            'level':2
+        }
+        self.monster = {
+            'type':4,
+            'coll':[0,0],
+            'level':1
+        }
+        self.pos_message = {
+            'type':5,
+            'coords':self.one_coords,
+            'level':self.level
+        }
+        self.monster1 = {}
+        self.monster2 = {}
+
+        self.monster1[0]=self.init_monlevel1_message
+        self.monster1[1]=self.init_monlevel1_message
+        self.monster2[0]=self.init_monlevel2_message
+        self.monster2[1]=self.init_monlevel2_message
+        self.message = {
+            'type':0
+        }
+
+        self.counter = 1
+        self.names = ['','']
+        self.start = False
+        self.start_message={
+            'type':7,
+            'time':50,
+            'anothername':''
+        }
+
+        self.time_message = {
+            'type':8,
+            'time':None
+        }
+
+        self.leave_message = {
+            'type':9
+        }
+        
+    def init_enemy(self):
+        for i in range(3):
+            my_list = self.targets[1]
+            for j in range(my_list[i]): #把鴨子數放入coord裡
+                self.one_coords[i].append((self.width//(my_list[i])*j,300-(i*150)+30*(j%2)))
+        for i in range(3):
+            my_list=self.targets[2]
+            for j in range(my_list[i]):
+                self.two_coords[i].append((self.width//(my_list[i])*j,300-(i*150)+30*(j%2)))
+    
+    def timer(self, new_sock, nickname,currentplayers):
+        times = 60
+        global currentplayer
+        while times >= 0 and not self.leave:
+            self.time_message['time'] = times
+            reply = (json.dumps(self.time_message) + '\n').encode('utf-8')
+            for client in self.client_list:
+                client['socket'].sendall(reply)
+            times -= 1
+            time.sleep(1)
+
+        if times < 0:
+            with self.lock:
+                to_remove = None
+                for client in self.client_list:
+                    if client['current'] == 0:
+                        to_remove = client
+                        break
+                    elif client['current'] == 1:
+                        to_remove = client
+                        break
+                
+                if to_remove:
+                    print('removed successful')
+                    self.client_list.remove(to_remove)
+                    new_sock.close()
+                    currentplayer -= 1
+                    print(currentplayer)
+                else:
+                    print('removed failed')
+                    
+
+
+        
+
+    def connect(self,new_sock,sockname,currentplayers):
+        self.start = False
+        self.leave = False
+        global currentplayer
+        while(True):
+            f = new_sock.makefile(encoding='utf-8')
+            try:
+                text = f.readline()
+                # if text == '':
+                #     if nickname != '':
+                #         new_client = {
+                #             'nickname':nickname,
+                #             'socket':new_sock
+                #         }
+                #         if new_client in (self.client_list):
+                #             self.client_list.remove(new_client)
+                #             print(f'{nickname} at {sockname} 以離線')
+                #     new_sock.close()
+                #     break
+
+                self.message = json.loads(text)
+
+                if self.message and self.message['type'] == 1:
+                    nickname = self.message['nickname']
+                    self.names[currentplayers] = nickname
+                    print(f'\n the len is {len(self.client_list)}\n')
+                    new_client = {
+                        'nickname': nickname,
+                        'socket':new_sock,
+                        'current':len(self.client_list)
+                    }
+                    self.client_list.append(new_client)
+                    print(f'append \n\n')
+                    self.msgdict={
+                        'type':2
+                    }
+                    data = (json.dumps(self.msgdict)+'\n').encode('utf-8')   
+                    new_sock.sendall(data)
+
+                if len(self.client_list) == 2 and self.start == False:  
+                    self.start = True  
+                    for i, client in enumerate(self.client_list):  
+                        self.start_message['anothername'] = self.names[1 - i]  
+                        reply = (json.dumps(self.start_message) + '\n').encode('utf-8')
+                        client['socket'].sendall(reply)  
+                        if self.start:
+                            print('start timer')
+                            thread_time = threading.Thread(target=self.timer,args=(new_sock,nickname,currentplayers))
+                            thread_time.start()
+
+
+                # if self.start:
+                #     if currentplayers == 0:
+                #         self.start_message['anothername'] = self.names[1]
+                #         reply = (json.dumps(self.start_message)+'\n').encode('utf-8')
+                #         self.client_list[0]['socket'].sendall(reply)
+                #         print('start message0')
+                #     elif currentplayers == 1:
+                #         self.start_message['anothername'] = self.names[0]
+                #         reply = (json.dumps(self.start_message)+'\n').encode('utf-8')
+                #         self.client_list[1]['socket'].sendall(reply)
+                #         print('start message1')
+                        
+                        
+
+    
+                # if self.message and self.message['type'] == 3:
+                #     print('hello')
+                #     the = threading.Thread(target=self.gun_data,args = (new_sock,currentplayer,self.message))
+                #     self.gundata[currentplayer] = self.message
+                #     if currentplayer == 1:
+                #         reply = self.gundata[0]
+                #     else:
+                #         reply = self.gundata[1]
+                #     data = (json.dumps(reply)+'\n').encode('utf-8')
+                #     new_sock.sendall(data)
+
+                if self.message and self.message['type'] == 6:
+                    self.scores[currentplayers] = self.message
+                    if currentplayers == 1:
+                        reply = self.scores[0]
+                    else:
+                        reply = self.scores[1]
+                    data = (json.dumps(reply)+'\n').encode('utf-8')
+                    new_sock.sendall(data)
+
+                if self.message and self.message['type'] == 10:
+                    self.leave = True
+                    self.handle_client_disconnect(new_sock,currentplayers)
+                    break
+                
+                
+                # if self.message and self.message['type'] == 4:
+                #     self.update_monster()
+                #     self.move_level()
+                # time.sleep(0.01)
+                # if self.message and self.message['type'] == 4:
+                    
+                #     thread_monster = threading.Thread(target=self.update_monster,args=(new_sock,currentplayer))
+            except(ConnectionAbortedError,ConnectionResetError):
+                self.leave = True
+                self.handle_client_disconnect(new_sock,currentplayers)
+                break
+            except json.JSONDecodeError:
+                self.leave = True
+                self.handle_client_disconnect(new_sock,currentplayers)
+                break
+
+    def handle_client_disconnect(self, new_sock, currentplayers):
+        to_remove = None
+        with self.lock:
+            for client in self.client_list:
+                if client['socket'] == new_sock:
+                    to_remove = client
+                    break
+            if to_remove:
+                print('Client disconnected successfully')
+                self.client_list.remove(to_remove)
+                new_sock.close()
+                global currentplayer
+                currentplayer -= 1
+                reply = (json.dumps(self.leave_message)+'\n').encode('utf-8')
+                for client in self.client_list:
+                    client['socket'].sendall(reply)
+                print(f"Current player count: {currentplayer}")
+            else:
+                print('Client removal failed')
+            
+    def gun_data(self,new_sock,currentplayer):
+        timer = pygame.time.Clock()
+        while True:
+            timer.tick(60)
+            print(1)
+            if self.message and self.message['type'] == 3:
+                self.gundata[currentplayer] = self.message
+                if currentplayer == 1:
+                    reply = self.gundata[0]
+                else:
+                    reply = self.gundata[1]
+                data = (json.dumps(reply)+'\n').encode('utf-8')
+                new_sock.sendall(data)
+        #        mouse_pos = pygame.mouse.get_pos()
+        # for i in range(len(targets)):
+        #     for j in range(len(targets[i])):
+        #         if targets[i][j].collidepoint(mouse_pos): #檢測點有沒有在rect裡
+        #             coords[i].pop(j)
+        #             self.points += 10 + 10*(i**2)
+    def update_monster(self):
+        try:
+            print('hello')
+            if self.message['type'] == 4 and self.message['level'] == 1:
+                postion = self.message['coll']
+                self.one_coords[postion[0]].pop(postion[1])
+                if self.one_coords == [[],[],[]]:
+                    self.level == 2
+                
+            elif self.message['type'] == 4 and self.message['level'] == 2:
+                postion = self.message['coll']
+                self.two_coords[postion[0]].pop(postion[1])
+                if self.two_coords == [[],[],[]]:
+                    self.level = 1
+                    self.init_enemy()
+            reply = (json.dumps(self.pos_message)+'\n').encode('utf-8')
+            for client in self.client_list:
+                client['socket'].sendall(reply)
+        except:
+            return
+      
+
+        
+                
+    def move_level(self):
+        timer = pygame.time.Clock()
+        
+        if self.level == 1 or self.level == 2:
+            self.max_val = 3
+        
+            if self.level == 1:
+                for i in range(self.max_val):
+                    for j in range(len(self.one_coords[i])):
+                        my_coords = self.one_coords[i][j]
+                        if my_coords[0] < -150:   #x座標
+                            self.one_coords[i][j]=self.width,my_coords[1]
+                        else:
+                            self.one_coords[i][j] = (my_coords[0] - (2**(i+1)),my_coords[1])
+            elif self.level == 2:
+                for i in range(self.max_val):
+                    for j in range(len(self.two_coords[i])):
+                        my_coords = self.two_coords[i][j]
+                        if my_coords[0] < -150:   #x座標
+                            self.two_coords[i][j]=self.width,my_coords[1]
+                        else:
+                            self.two_coords[i][j] = (my_coords[0] - (2**(i+1)),my_coords[1])
+
+        reply = (json.dumps(self.pos_message)+'\n').encode('utf-8')
+        for client in self.client_list:
+            client['socket'].sendall(reply)
+            
+            
+                
+                
+
+    def run(self):
+        global currentplayer
+        while(True):
+            print('waiting to accept a new connection')
+            new_sock,sockname=self.server.accept()
+            print('connection')
+            currentplayer += 1
+            
+            #thread_gun = threading.Thread(target=self.gun_data,args=(new_sock,currentplayer))
+            #thread_move = threading.Thread(target=self.move_level,args=())
+            thread_client = threading.Thread(target=self.connect, args=(new_sock, sockname, currentplayer))
+            thread_client.start()
+
+            
+            #thread_gun.start()
+
+            #thread_move.start()
+            
+            
+
+if __name__ == '__main__':
+    ser = servers()
+    ser.run()
