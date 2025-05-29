@@ -1,0 +1,522 @@
+import pygame
+import math
+import os
+import time
+import json
+from client import network
+import threading
+
+pygame.init()
+pygame.display.set_caption('duck hunt game')
+class duckgame():
+    def __init__(self):
+        pygame.mixer.init()
+        self.fps = 60
+        self.timer = pygame.time.Clock()
+        self.font = pygame.font.Font('freesansbold.ttf',25) #加載字體 大小為25
+        self.gameover_font = pygame.font.Font('freesansbold.ttf',50)
+        self.width = 900
+        self.height = 800
+        self.screen = pygame.display.set_mode([self.width,self.height]) #創建螢幕
+        self.bgs = []
+        self.banners = []
+        self.guns = []
+        self.menu_img = pygame.image.load(f'client/menu/file.png')
+        self.nickname_img = pygame.image.load(f'client/menu/file1.png')
+        self.game_over_img = pygame.image.load(f'client/menu/end menu.png')
+        self.waiting_menu = pygame.image.load(f'client/menu/waiting menu.png')
+        self.wait_result = pygame.image.load(f'client/menu/wait_result.png')
+        self.win = pygame.image.load(f'client/menu/win menu.png')
+        self.lose = pygame.image.load(f'client/menu/lose menu.png')
+        self.tie = pygame.image.load(f'client/menu/tie.png')
+        self.lea = pygame.image.load(f'client/menu/leave.png')
+        self.gun_sound = pygame.mixer.Sound(f'client/sound/Laser Gun.wav')
+        self.gun_sound.set_volume(0.4)
+        self.bird_sound = pygame.mixer.Sound(f'client/sound/Drill Gear.mp3')
+        self.bird_sound.set_volume(0.4)
+        pygame.mixer.music.load(f'client/sound/bg_music.mp3')
+        pygame.mixer.music.set_volume(0.2)
+        self.target_images = [[],[]]
+        self.one_coords=[[],[],[]]
+        self.two_coords=[[],[],[]]
+        self.targets = {1:[10,5,3],
+                   2:[12,8,5]} #target數量
+        self.level = 1
+        self.shot=False
+        self.mode = 0
+        self.ammo = 0
+        self.total_shots = 0
+        self.points = 0
+        self.points2 = 0
+        self.time_remaining = 30
+        self.counter = 1
+        self.cooldown = 0
+
+        self.gun_point = (self.width/2,self.height-200)
+        self.gun_width = 10
+        self.rotation = 0
+        self.flip = False
+        self.mouse_pos = 0
+        self.msgdict = {"type":0}
+
+        self.menu = True
+        self.game_over = False
+        self.exit = False
+        self.clicked = False
+        self.leave = False
+
+        self.name1=''
+        self.name2=''
+        
+        self.do = True
+        self.p2 = None
+    
+    def load_image(self):
+        for i in range(1,3):
+            self.bgs.append(pygame.image.load(f'client/background/bg{i}.png')) #載入背景
+            self.guns.append(pygame.transform.scale(pygame.image.load(f'client/guns/gun1.png'),(100,100)))#載入槍
+            self.banners.append(pygame.image.load(f'client/banners/bg2.png')) #載入分數版
+            
+            for j in range(1,4):
+                self.target_images[i-1].append(pygame.transform.scale(pygame.image.load(f'client/target/duck{j}.png'),(120-(j*18),80-(j*12))))
+
+    def draw_gun(self):
+        self.mouse_pos = pygame.mouse.get_pos()
+        lasers = ['red','red']
+        clicks = pygame.mouse.get_pressed()
+        if self.mouse_pos[0] != self.gun_point[0]: #規避/0的情況
+            slope = (self.mouse_pos[1]-self.gun_point[1])/(self.mouse_pos[0]-self.gun_point[0])
+        else:
+            slope = -100000 #垂直
+        angle = math.atan(slope)
+        self.rotation = math.degrees(angle)
+        if self.mouse_pos[0] < self.width/2: #水平翻轉槍枝
+            self.flip = True
+            gun = pygame.transform.flip(self.guns[0],True,False)
+            if self.mouse_pos[1]<600: #判斷是否在menu上方
+                self.screen.blit(pygame.transform.rotate(gun,90-self.rotation),(self.width/2-(self.gun_width+60),self.height-280))
+                if clicks[0]:
+                    pygame.draw.circle(self.screen,lasers[self.level-1],self.mouse_pos,5)
+        else:
+            self.flip = False
+            gun=self.guns[self.level-1]
+            if self.mouse_pos[1]<600: 
+                self.screen.blit(pygame.transform.rotate(gun,270-self.rotation),(self.width/2-self.gun_width,self.height-280))
+                if clicks[0]:
+                    pygame.draw.circle(self.screen,lasers[self.level-1],self.mouse_pos,5)
+
+    def draw_level(self,coords):
+        targets_rects=[[],[],[]]
+        for i in range(len(coords)):
+            for j in range(len(coords[i])):
+                targets_rects[i].append(pygame.rect.Rect(coords[i][j][0],coords[i][j][1],80-i*5,80-i*5)) #把目標設置一個框架
+
+                self.screen.blit(self.target_images[self.level-1][i],coords[i][j])
+        return targets_rects
+
+    def init_enemy_coord(self):
+        for i in range(3):
+            my_list=self.targets[1]
+            for j in range(my_list[i]): #把鴨子數放入coord裡
+                self.one_coords[i].append((self.width//(my_list[i])*j,300-(i*150)+30*(j%2)))
+        for i in range(3):
+            my_list=self.targets[2]
+            for j in range(my_list[i]):
+                self.two_coords[i].append((self.width//(my_list[i])*j,300-(i*150)+30*(j%2)))
+
+    def move_level(self,coords):
+        if self.level == 1 or self.level == 2:
+            max_val = 3
+        for i in range(max_val):
+            for j in range(len(coords[i])):
+                my_coords = coords[i][j]
+                if my_coords[0] < -150:   #x座標
+                    coords[i][j]=self.width,my_coords[1]
+                else:
+                    coords[i][j] = (my_coords[0] - (2**(i+1)),my_coords[1])
+        return coords
+
+    def check_shot(self,targets,coords):
+        mouse_pos = pygame.mouse.get_pos()
+        for i in range(len(targets)):
+            for j in range(len(targets[i])):
+                if targets[i][j].collidepoint(mouse_pos): #檢測點有沒有在rect裡
+                    coords[i].pop(j)
+                    self.bird_sound.play()
+                    self.points += 10 + 10*(i**2)
+        return coords
+    
+    def double_check_shot(self,targets,coords):
+        mouse_pos = pygame.mouse.get_pos()
+        for i in range(len(targets)):
+            for j in range(len(targets[i])):
+                if targets[i][j].collidepoint(mouse_pos): #檢測點有沒有在rect裡
+                    
+                    self.points += 10 + 10*(i**2)
+                    return [i,j]
+        return []
+
+    def draw_score(self):
+        
+        if self.mode == 1:
+            points_text = self.font.render(f'Points : {self.points}',True,'black')  #創建文字變數
+            self.screen.blit(points_text, (320,640))
+            shots_text = self.font.render(f'Total Shots : {self.total_shots}',True,'black')  
+            self.screen.blit(shots_text, (320,670))
+            time_text = self.font.render(f'Time Remaining  : {self.time_remaining}',True,'black')
+            self.screen.blit(time_text, (320,700))
+            mode_text = self.font.render(f'Single play !',True,'black')
+            self.screen.blit(mode_text,(320,730))  
+        elif self.mode == 2:
+            points1_text = self.font.render(f'{self.name1} Points : {self.points}',True,'black')  
+            self.screen.blit(points1_text, (320,640))
+            points2_text = self.font.render(f'{self.name2} Points : {self.points2}',True,'black')
+            self.screen.blit(points2_text, (320,670))
+            time_text = self.font.render(f'Time Remaining : {self.time_remaining}',True,'black')
+            self.screen.blit(time_text, (320,700))
+            mode_text = self.font.render(f'Double play !',True,'black')
+            self.screen.blit(mode_text,(320,730))
+
+    def draw_menu(self):
+        self.screen.blit(self.menu_img,(0,0))
+        mouse_pos = pygame.mouse.get_pos()
+        clicks = pygame.mouse.get_pressed()
+        singleplay_button = pygame.rect.Rect((267,300),(365,140)) 
+        doubleplay_button = pygame.rect.Rect((270,520),(363,143))
+        if self.cooldown <= 0:
+            if singleplay_button.collidepoint(mouse_pos) and clicks[0] and not self.clicked:
+                self.one_coords=[[],[],[]]
+                self.two_coords=[[],[],[]]
+                self.mode = 1
+                self.level = 0
+                self.menu = False
+                self.time_remaining = 30
+                self.total_shots = 0
+                self.points = 0
+                self.clicked = True
+                self.exit = False
+                self.game_over = False
+                self.leave = False
+            if doubleplay_button.collidepoint(mouse_pos) and clicks[0] and not self.clicked:
+                self.mode = 3
+                self.level = 0
+                self.time_remaining = 50
+                self.menu = False
+                self.time_passed = 0
+                self.total_shots = 0
+                self.points = 0
+                self.clicked = True
+
+    def draw_game_over(self):
+        self.game_over = True
+        self.screen.blit(self.game_over_img,(0,0))
+        leave_button = pygame.rect.Rect((175,576),(230,150))
+        main_ment_button = pygame.rect.Rect((515,576),(230,150))
+        mouse_pos = pygame.mouse.get_pos()
+        clicks = pygame.mouse.get_pressed()
+        points_text = self.gameover_font.render(f'  {self.points}',True,'black')
+        self.screen.blit(points_text,(440,450))
+        if leave_button.collidepoint(mouse_pos) and clicks[0]:
+            self.Leave = True
+            pygame.quit()
+            os._exit(0)
+        if main_ment_button.collidepoint(mouse_pos) and clicks[0]:
+            self.menu = True
+            self.clicked = False
+            self.cooldown = 30
+                
+    def draw_exit(self,new_sock):
+        if not self.menu and not self.game_over and self.mode == 1:
+            exit_button = pygame.rect.Rect((683,653),(140,80))
+            mouse_pos = pygame.mouse.get_pos()
+            clicks = pygame.mouse.get_pressed()
+            if exit_button.collidepoint(mouse_pos) and clicks[0]:
+                self.exit = True
+                self.menu = True
+                self.clicked = False
+        elif self.mode == 2 and not self.menu and not self.game_over:
+            exit_button = pygame.rect.Rect((683,653),(140,80))
+            mouse_pos = pygame.mouse.get_pos()
+            clicks = pygame.mouse.get_pressed()
+            if exit_button.collidepoint(mouse_pos) and clicks[0]:
+                new_sock.send(pack_leave())
+                os._exit(0)
+                
+    def draw_input_name(self):
+        color_inactive = (100, 100, 200)
+        color_active = (200, 200, 255)
+        self.screen.blit(self.nickname_img, (0, 0))
+        font = pygame.font.Font(None, 78)
+        input_box = pygame.Rect(300, 400, 300, 50)
+        active = False
+        color = color_inactive
+        text = ""
+        while self.mode == 3:
+            clicks = pygame.mouse.get_pressed()
+            mouse_pos = pygame.mouse.get_pos()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    os._exit(0)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    active = input_box.collidepoint(event.pos)
+                    color = color_active if active else color_inactive
+                if event.type == pygame.KEYDOWN:
+                    if active:
+                        
+                        if event.key == pygame.K_BACKSPACE:
+                            text = text[:-1]
+                        else:
+                            text += event.unicode
+
+            #繪製輸入框和文字
+            self.screen.fill((30, 30, 30))
+            self.screen.blit(self.nickname_img, (0, 0))
+            txt_surface = font.render(text, True, color)
+            width = max(300, txt_surface.get_width() + 10)
+            input_box.w = width
+            self.screen.blit(txt_surface, (input_box.x + 5, input_box.y + 5))
+            pygame.draw.rect(self.screen, color, input_box, 2)
+            check = pygame.rect.Rect((190,572),(500,185))
+            if check.collidepoint(mouse_pos) and text != '' and clicks[0] :
+                self.mode=4
+                self.name1=text
+                # thread_listen = threading.Thread(target=n.start_listen,args=())
+                # thread_listen.start()
+                return
+                #n.start_listen()
+                #thread_wait = threading.Thread(target=n.waiting,args=())
+                #thread_wait.start()
+            
+
+            pygame.display.flip()
+
+    def waiting_player(self):
+        self.screen.blit(self.waiting_menu,(0,0))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                os._exit(0)
+
+    def waiting_result(self):
+        self.screen.blit(self.wait_result,(0,0))
+        pygame.display.flip()
+
+    def win_lose(self):
+        self.game_over = True
+        if self.points > self.points2:
+            self.screen.blit(self.win,(0,0))
+        elif self.points < self.points2:
+            self.screen.blit(self.lose,(0,0))
+        else:
+            self.screen.blit(self.tie,(0,0))
+        font = pygame.font.Font('freesansbold.ttf',70)
+        points1_text = font.render(f' {self.points}',True,'black') 
+        self.screen.blit(points1_text,(450,440))
+
+    def player_leave(self):
+        self.screen.blit(self.lea,(0,0))
+        font1 = pygame.font.Font('freesansbold.ttf',50)
+        font = pygame.font.Font('freesansbold.ttf',70)
+        leave_message = font1.render(f'player {self.name2} has leaved the game',True,'black')
+        score = font.render(f' {self.points}',True,'black')
+        self.screen.blit(leave_message,(50,370))
+        self.screen.blit(score,(450,530))
+        
+
+    def run(self,player2):
+        player2.load_image()
+        self.load_image()
+        run=True
+        n=network()
+        pygame.mixer.music.play(-1)
+        self.init_enemy_coord()
+        while run:
+            
+            if self.mode != 2:
+                if self.cooldown > 0:
+                    self.cooldown -= 1
+                self.timer.tick(self.fps)
+                if self.level != 0:
+                    if self.counter < 60 and self.time_remaining != 0: #fps是60，若counter到60表示1秒已過
+                        self.counter+=1
+                    elif self.counter == 60 and self.time_remaining != 0:
+                        self.counter=1
+                        self.time_remaining -= 1
+
+            self.screen.fill('black') #背景為黑
+            self.screen.blit(self.bgs[self.level-1],(0,0)) #填上背景，從(0,0)的位置
+            self.screen.blit(self.banners[self.level-1],(0,self.height-200))
+            
+
+            if self.menu:
+                self.level = 0
+                self.draw_menu()
+            elif self.mode == 3:
+                self.draw_input_name()
+                self.one_coords=[[],[],[]]
+                self.two_coords=[[],[],[]]
+            elif self.mode == 4:
+                thread_listen = threading.Thread(target=n.start_listen,args=())
+                thread_waiting = threading.Thread(target=n.waiting,args=())
+                while True:
+                    if self.do:
+                        n.name = self.name1
+                        thread_listen.start()
+                        time.sleep(0.5)
+                        thread_waiting.start()
+                        
+                        self.do = False
+                        self.two = True
+                    self.waiting_player()
+                    if n.start == True:
+                        self.time_remaining = n.time
+                        self.mode = 2
+                        self.level = 1
+                        self.name2 = n.names2
+                        break
+            elif self.time_remaining <= 0 and self.level > 0 and self.mode != 2:
+                self.draw_game_over()
+            elif self.time_remaining <= 0 and self.level > 0 and self.mode == 2:
+                self.win_lose()
+            elif self.mode == 5:
+                self.player_leave()
+
+            self.draw_exit(n)
+
+            if self.msgdict['type'] == 9:
+                self.mode = 5
+                self.level = 0
+            if self.msgdict['type'] == 8:
+                self.time_remaining = self.msgdict['time']
+            if self.level==1 and self.game_over != True:
+                target_boxes = self.draw_level(self.one_coords)
+                self.one_coords = self.move_level(self.one_coords)
+                data = pack_score(self.points)
+                n.send(data)
+                if self.msgdict['type'] == 6:
+                    self.points2 = self.msgdict['score']
+                # if self.msgdict['type'] == 5 and self.msgdict['level'] == 1:
+                #      self.one_coords = self.msgdict['coords']
+                #      self.level = self.msgdict['level']
+                # else: 
+                #self.one_coords = self.move_level(self.one_coords)
+                if self.shot:
+                    self.gun_sound.play()
+                    # self.one_coords = self.check_shot(target_boxes,self.one_coords)
+                    # coll = self.double_check_shot(target_boxes,self.one_coords)
+                    # if coll != []:
+                    #     data = pack_monster(coll,self.level)
+                    #     n.send(data)
+                    self.one_coords = self.check_shot(target_boxes,self.one_coords)
+                    self.shot = False
+            elif self.level==2 and self.game_over != True:
+                target_boxes = self.draw_level(self.two_coords)
+                self.two_coords = self.move_level(self.two_coords)
+                # self.two_coords = self.move_level(self.two_coords)
+                data = pack_score(self.points)
+                n.send(data)
+                if self.msgdict['type'] == 6:
+                    self.points2 = self.msgdict['score']
+                # if self.msgdict['type'] == 5 and self.msgdict['level'] == 2:
+                #     self.two_coords = self.msgdict['coords']
+                #     self.level = self.msgdict['level'] 
+                # else:
+                if self.shot:
+                    # self.two_coords = self.check_shot(target_boxes,self.two_coords)
+                    self.two_coords = self.check_shot(target_boxes,self.two_coords)
+                    self.gun_sound.play()
+                    # if coll != []:
+                    #     data = pack_monster(coll,self.level)
+                    #     n.send(data)
+                    self.shot = False
+
+            if self.level>0 and self.game_over != True:
+                self.draw_gun()
+                # data = pack_gun(self.rotation,self.flip,self.mouse_pos)
+                # n.send(data)
+                self.msgdict = n.recv()
+                # if self.msgdict['type'] == 3:
+                #     draw_player2_gun(player2,self.screen,self.msgdict)
+                self.draw_score()
+                if target_boxes == [[],[],[]] and self.level < 2:
+                    self.level += 1
+                elif target_boxes == [[],[],[]] and self.level >= 2:
+                    self.level = 1
+                    self.init_enemy_coord()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: #按下右上角的退出鍵就會結束
+                    run = False
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mouse_pos = pygame.mouse.get_pos()
+                    if (0 < mouse_pos[0] < self.width) and (0 < mouse_pos[1] <self.height-200): #射擊
+                        self.shot=True
+                        self.total_shots += 1
+                        if self.mode == 1:
+                            self.ammo -= 1
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.clicked:
+                    self.clicked = False
+            
+            pygame.display.flip() #更新屏幕
+
+def draw_player2_gun(player2,screen,msgdcit):
+    player2.gun_width = 100
+    if msgdcit['ifflip'] == True:
+        gun = pygame.transform.flip(player2.guns[0],True,False)
+        if msgdcit['mouse_pos'][1] < 600: 
+                screen.blit(pygame.transform.rotate(gun,90-msgdcit['rotate']),(player2.width/2-(player2.gun_width+60),player2.height-280))
+               
+    else:
+        gun = pygame.transform.flip(player2.guns[0],False,False)
+        if msgdcit['mouse_pos'][1] < 600: 
+                screen.blit(pygame.transform.rotate(gun,270-msgdcit['rotate']),(player2.width/2-(player2.gun_width),player2.height-280))
+
+
+def pack_gun(rotation,flip,mouse_pos):  #把槍資訊包成json格式
+    msgdict = { #3 gun massage
+        'type':3,
+        'rotate':rotation,
+        'ifflip':flip,
+        'mouse_pos':mouse_pos
+    }
+    data = (json.dumps(msgdict)+'\n').encode('utf-8')
+    return data
+
+def pack_score(score):
+    msgdict = {
+        'type':6,
+        'score':score
+    }
+    data = (json.dumps(msgdict)+'\n').encode('utf-8')
+    return data
+
+def pack_leave():
+    msgdict = {
+        'type':10
+    }
+    data = (json.dumps(msgdict)+'\n').encode('utf-8')
+    return data
+
+def pack_monster(coll,level):
+    if level == 1:
+        msgdict = {
+            'type':4,
+            'coll':coll,
+            'level':level
+        }
+    elif level == 2:
+        msgdict = {
+            'type':4,
+            'coll':coll,
+            'level':level
+        }
+    data = (json.dumps(msgdict)+'\n').encode('utf-8')
+    return data
+   
+        
+if __name__=='__main__':
+    duck1 = duckgame()
+    duck2 = duckgame()
+    duck1.run(duck2)
