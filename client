@@ -1,0 +1,64 @@
+import socket 
+import threading
+import os
+import time
+import json
+
+class network:
+    def __init__(self):
+        self.client = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.server = '127.0.0.1'
+        self.port = 5555
+        self.address = (self.server,self.port)
+        self.name=''
+        self.names2=''
+        self.msgdict={
+            "type":1,
+            "nickname":self.name
+        }
+        self.f = self.client.makefile(encoding='utf-8')
+        self.start = False
+        self.time = 0
+        
+    def start_listen(self):
+        self.client.connect(self.address)
+        self.msgdict={
+            "type":1,
+            "nickname":self.name
+        }
+        data = (json.dumps(self.msgdict)+'\n').encode('utf-8')
+        self.client.sendall(data)
+        try:
+        
+            text = self.f.readline()
+            self.msgdict = json.loads(text)
+            if self.msgdict['type'] == 2:
+                print('成功進入伺服器')
+            else:
+                print('進入伺服器失敗')
+                os._exit(0)
+                input('')
+            
+        except (ConnectionAbortedError,ConnectionResetError):
+            print('伺服器斷線')
+            self.client.close()
+            os._exit(0)
+    
+    def waiting(self):
+        while not self.start:
+            text = self.f.readline()
+            self.msgdict = json.loads(text)
+            if self.msgdict['type'] == 7:
+                self.time = self.msgdict['time']
+                self.names2 = self.msgdict['anothername']
+                self.start = True
+                print('hello')
+
+    def recv(self):
+        text = self.f.readline()
+        self.msgdict = json.loads(text)
+        return self.msgdict
+            
+
+    def send(self,data):
+           self.client.sendall(data)
